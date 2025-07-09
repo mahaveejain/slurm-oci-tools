@@ -1,54 +1,74 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# gather_and_check_nodes.sh
 
-# === CONFIG ===
+set -euo pipefail
+
+# === CONFIGURATION ===
 INVENTORY_FILE="/tmp/gf_inventory"
-PLAYBOOK_FILE=~/tmp/gather_facts.yml  #Copied from this repo
+PLAYBOOK_FILE="$HOME/mj/gather_facts.yml"
 RAW_LOG="/tmp/raw.dat"
 TMP_LOG="/tmp/ansible_tmp_output.log"
 PARSED_OUTPUT="/tmp/final_raw.dat"
-DIFF_OUTPUT="/tmp/problem_nodes.diff"
+ALL_BRACKETS="/tmp/all_bracket_entries.txt"
+CLEAN_INVENTORY="/tmp/full_node_list_cleaned.txt"
+MISSING_NODES="/tmp/missing_nodes.txt"
 TIMEOUT_DURATION="1m"
+ANSIBLE_VERBOSITY=""
 
-# Step 0: Check if playbook exists
-if [ ! -f "$PLAYBOOK_FILE" ]; then
-    echo "Error: Playbook file '$PLAYBOOK_FILE' not found. Exiting."
-    exit 1
+# === PRE-CHECKS ===
+if [[ ! -f "$PLAYBOOK_FILE" ]]; then
+  echo "Error: playbook file '$PLAYBOOK_FILE' not found."
+  exit 1
 fi
 
-# Step 1: Generate inventory and store in /tmp
-echo "Generating Slurm node inventory..."
-sinfo -Neh -p compute | awk '{print $1}' | sort -t- -k 4 -n > "$INVENTORY_FILE"
+command -v sinfo >/dev/null || { echo "Missing: sinfo"; exit 1; }
+command -v ansible-playbook >/dev/null || { echo "Missing: ansible-playbook"; exit 1; }
 
-# Step 2: Run ansible-playbook with timeout
-echo "Running ansible-playbook with timeout..."
-timeout "$TIMEOUT_DURATION" ansible-playbook "$PLAYBOOK_FILE" -i "$INVENTORY_FILE" | tee "$TMP_LOG"
+# === STEP 1: Build inventory ===
+echo "Building Slurm inventory..."
+{
+  echo "[compute]"
+  sinfo -Neh -p compute | awk '{print $1}' | sort -u
+} > "$INVENTORY_FILE"
+
+# Create sorted clean list (no headers) for comparison
+grep -v '^\[' "$INVENTORY_FILE" | sort -u > "$CLEAN_INVENTORY"
+
+# === STEP 2: Run Ansible ===
+echo "Running Ansible playbook with timeout $TIMEOUT_DURATION..."
+timeout "$TIMEOUT_DURATION" ansible-playbook $ANSIBLE_VERBOSITY -i "$INVENTORY_FILE" "$PLAYBOOK_FILE" | tee "$TMP_LOG"
 ret_code=${PIPESTATUS[0]}
+echo "ansible-playbook exited with code $ret_code"
 
-# Step 3: If it hangs, capture and parse the output
-if [ "$ret_code" -eq 124 ]; then
-    echo "Ansible command hung. Capturing output..."
-    cp "$TMP_LOG" "$RAW_LOG"
+# === STEP 3: Parse responding hostnames ===
+cp "$TMP_LOG" "$RAW_LOG"
+grep -oP '\[\K[^\]]+' "$RAW_LOG" | sort -u > "$ALL_BRACKETS"
 
-    echo "Extracting node names from output..."
-    awk -F[ '{print $2}' "$RAW_LOG" | awk -F] '{print $1}' | sort -t- -k 4 -n > "$PARSED_OUTPUT"
-    echo "Processed output saved to $PARSED_OUTPUT"
+# Keep only valid hostnames from inventory
+comm -12 "$ALL_BRACKETS" "$CLEAN_INVENTORY" | sort -u > "$PARSED_OUTPUT"
+echo "Parsed responding hosts → $PARSED_OUTPUT"
 
-    echo "Cleaning up raw.dat..."
-    rm -f "$RAW_LOG"
+# === STEP 4: Find missing hosts ===
+comm -23 "$CLEAN_INVENTORY" "$PARSED_OUTPUT" > "$MISSING_NODES"
 
-    # Step 4: Compare inventory and responding nodes
-    echo "Comparing inventory to responding nodes..."
-    diff "$INVENTORY_FILE" "$PARSED_OUTPUT" > "$DIFF_OUTPUT"
+# === STEP 5: Output results ===
+total=$(wc -l < "$CLEAN_INVENTORY")
+responded=$(wc -l < "$PARSED_OUTPUT")
+missing=$(wc -l < "$MISSING_NODES")
 
-    if [ -s "$DIFF_OUTPUT" ]; then
-        echo "Problematic nodes detected. See $DIFF_OUTPUT:"
-        cat "$DIFF_OUTPUT"
-    else
-        echo "All nodes responded. No issues found."
-    fi
+echo
+echo "Summary:"
+echo "  Total nodes         : $total"
+echo "  Responded to Ansible: $responded"
+echo "  Missing nodes       : $missing"
+
+if [[ "$missing" -eq 0 ]]; then
+  echo "All nodes responded successfully."
 else
-    echo "Ansible completed successfully. No need to process output."
+  echo
+  echo "Missing nodes:"
+  cat "$MISSING_NODES"
 fi
 
-# Step 5: Cleanup
-rm -f "$TMP_LOG"
+# === CLEANUP TEMP FILES ===
+rm -f "$TMP_LOG" "$RAW_LOG" "$ALL_BRACKETS"
