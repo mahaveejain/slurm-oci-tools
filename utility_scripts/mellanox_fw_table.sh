@@ -2,6 +2,9 @@
 # This script identifies the firmware version on OCI H100 Mellanox cards
 # and determines whether a firmware upgrade is required as on May, 2026
 # Author: Mahaveer Jain
+# Updates:
+# 5/13/2026 - Anand Manian - Updated minimum version numbers for  based on more recent information from HoPS team
+# 5/13/2026 - Anand Manian - Added version details for ConnectX-6 Lx
 
 set -u
 
@@ -61,10 +64,13 @@ fw_upgrade_required() {
 
   case "$family" in
     "ConnectX-7")
-      minimum_version="28.47.1900"
+      minimum_version="28.46.3048"
       ;;
     "ConnectX-6 Dx")
-      minimum_version="22.47.1088"
+      minimum_version="22.46.3048"
+      ;;
+    "ConnectX-6 Lx")
+      minimum_version="26.46.3048"
       ;;
     *)
       printf "N/A"
