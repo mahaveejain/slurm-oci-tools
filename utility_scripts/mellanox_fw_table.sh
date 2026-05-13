@@ -2,9 +2,11 @@
 # This script identifies the firmware version on OCI H100 Mellanox cards
 # and determines whether a firmware upgrade is required as on May, 2026
 # Author: Mahaveer Jain
-# Updates:
-# 5/13/2026 - Anand Manian - Updated minimum version numbers for  based on more recent information from HoPS team
-# 5/13/2026 - Anand Manian - Added version details for ConnectX-6 Lx
+# Update History:
+# 5/13/2026 Anand Manian 
+#   - Updated minimum version numbers for  based on more recent information from HoPS team
+#   - Added version details for ConnectX-6 Lx
+#   - Switched out flint (NVIDIA proprietary) with mstflint (Open source OFED) same as in original update script
 
 set -u
 
@@ -13,8 +15,8 @@ if ! command -v lspci >/dev/null 2>&1; then
   exit 1
 fi
 
-if ! command -v flint >/dev/null 2>&1; then
-  echo "Error: flint command not found." >&2
+if ! command -v mstflint >/dev/null 2>&1; then
+  echo "Error: mstflint command not found." >&2
   exit 1
 fi
 
@@ -99,7 +101,7 @@ print_separator
 sr_no=1
 
 for pci in "${pci_devices[@]}"; do
-  flint_output="$(sudo flint -d "$pci" q 2>/dev/null || true)"
+  flint_output="$(sudo mstflint -d "$pci" q 2>/dev/null || true)"
   family="$(lspci -s "$pci" | awk -F'[][]' 'NF >= 2 {print $(NF-1); exit}')"
 
   version="$(awk -F': *' '/^[[:space:]]*FW Version:/ {print $2; exit}' <<< "$flint_output")"
